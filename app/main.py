@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.api.v1 import auth, requestor, approver, accountant, profile
+from app.api.v1 import auth, requestor, approver, accountant, profile, admin, department, notifications
 
 app = FastAPI(title="Enterprise Expense Manager", version="1.0.0")
 
@@ -41,6 +41,9 @@ app.include_router(requestor.router)
 app.include_router(approver.router)
 app.include_router(accountant.router)
 app.include_router(profile.router)
+app.include_router(admin.router)
+app.include_router(department.router)
+app.include_router(notifications.router)
 
 @app.get("/")
 async def health_check():

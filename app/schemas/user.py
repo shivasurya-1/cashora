@@ -14,6 +14,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     org_id: int
+    department_id: Optional[int] = None
     role: UserRole = UserRole.REQUESTOR
 
 # Properties to return via API
@@ -21,6 +22,7 @@ class UserOut(UserBase):
     id: int
     role: UserRole
     org_id: int
+    department_id: Optional[int] = None
     is_active: bool
 
     class Config:
@@ -123,6 +125,7 @@ class UserCreateByAdmin(BaseModel):
     last_name: str
     phone_number: str
     role: str  # REQUESTOR or ACCOUNTANT
+    department_id: Optional[int] = None
 
  # Add this at the very top
 from pydantic import BaseModel, EmailStr
@@ -135,6 +138,7 @@ class UserListOut(BaseModel):
     last_name: str
     email: EmailStr
     role: str
+    department_id: Optional[int] = None
     phone_number: Optional[str]
     is_active: bool
     org_id: int
@@ -155,6 +159,7 @@ class UserUpdateSchema(BaseModel):
     last_name: Optional[str] = None
     phone_number: Optional[str] = None
     role: Optional[str] = None
+    department_id: Optional[int] = None
     is_active: Optional[bool] = None
 
 # Important for Python 3.14

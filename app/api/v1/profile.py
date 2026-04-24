@@ -6,6 +6,7 @@ from typing import List
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.organization import Organization
+from app.models.department import Department
 from app.schemas.user import UserOut, UserUpdate, PasswordChange, UserCreate
 from app.core.security import get_current_user
 bitter_security = Depends(get_current_user)
@@ -26,10 +27,10 @@ async def get_my_profile(
     current_user: User = bitter_security,
     db: AsyncSession = Depends(get_db)
 ):
-    # Reload user with organization data
+    # Reload user with organization and department data
     query = (
         select(User)
-        .options(joinedload(User.organization))
+        .options(joinedload(User.organization), joinedload(User.department))
         .where(User.id == current_user.id)
     )
     result = await db.execute(query)
@@ -45,7 +46,10 @@ async def get_my_profile(
         "org_id": user_with_org.org_id,
         "is_active": user_with_org.is_active,
         "org_code": user_with_org.organization.org_code,
-        "org_name": user_with_org.organization.name
+        "org_name": user_with_org.organization.name,
+        "department_id": user_with_org.department.id if user_with_org.department else None,
+        "department_name": user_with_org.department.name if user_with_org.department else None,
+        "department_code": user_with_org.department.code if user_with_org.department else None,
     }
 
 @router.post("/change-password")
@@ -135,6 +139,17 @@ async def add_new_user(
     existing_user = await db.execute(select(User).where(User.email == user_in.email))
     if existing_user.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    department_id = getattr(user_in, "department_id", None)
+    if department_id is not None:
+        dep_query = select(Department).where(
+            Department.id == department_id,
+            Department.org_id == current_user.org_id,
+            Department.is_active == True,
+        )
+        dep_result = await db.execute(dep_query)
+        if not dep_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Department not found")
 
     new_user = User(
         **user_in.model_dump(exclude={"password"}),
@@ -229,6 +244,28 @@ async def update_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid role: {update_data['role']}. Must be one of: admin, requestor, approver, accountant"
             )
+    if "department_id" in update_data:
+        if not is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins can change user department"
+            )
+        department_id = update_data["department_id"]
+        if department_id is None:
+            db_user.department_id = None
+        else:
+            dep_query = select(Department).where(
+                Department.id == department_id,
+                Department.org_id == current_user.org_id,
+                Department.is_active == True,
+            )
+            dep_result = await db.execute(dep_query)
+            if not dep_result.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Department not found"
+                )
+            db_user.department_id = department_id
     if "is_active" in update_data:
         if not is_admin:
             raise HTTPException(

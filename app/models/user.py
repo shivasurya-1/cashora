@@ -25,9 +25,12 @@ class User(Base):
     
     # Foreign Keys
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=True)
     
     # Relationships
     organization: Mapped["Organization"] = relationship(back_populates="users")
+    department: Mapped["Department"] = relationship("Department", back_populates="users")
+    device_tokens: Mapped[list["UserDeviceToken"]] = relationship("UserDeviceToken", back_populates="user")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
         default=lambda: datetime.now(timezone.utc)

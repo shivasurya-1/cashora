@@ -1,18 +1,163 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy import func
 from typing import List, Optional
 from app.db.session import get_db
 from app.models.expense import ExpenseRequest, ExpenseCategory, ExpenseStatus, ClarificationHistory
+from app.models.notification import UserDeviceToken
+from app.models.organization import Organization
+from app.models.user import User, UserRole
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ClarificationOut
 from app.services.expense_service import ExpenseService
 from app.services.cloudinary_service import cloudinary_service
+from app.services.push_service import dispatch_push_notifications
 from app.core.security import get_current_user # Dependency to get logged-in user
 import datetime
 
 router = APIRouter(prefix="/requestor", tags=["requestor"])
+
+
+def _status_for_requestor_ui(status: ExpenseStatus) -> str:
+    if status == ExpenseStatus.APPROVED:
+        return "approved"
+    if status == ExpenseStatus.AUTO_APPROVED:
+        return "auto_approved"
+    if status == ExpenseStatus.REJECTED:
+        return "rejected"
+    if status in [ExpenseStatus.CLARIFICATION_REQUIRED, ExpenseStatus.CLARIFICATION_RESPONDED]:
+        return "clarification"
+    if status == ExpenseStatus.PAID:
+        return "approved"
+    return "pending"
+
+
+@router.get("/dashboard")
+async def get_requestor_dashboard(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    if current_user.role != UserRole.REQUESTOR:
+        raise HTTPException(status_code=403, detail="Access denied. Requestor role required.")
+
+    today = datetime.datetime.utcnow()
+    month_start = datetime.datetime(today.year, today.month, 1)
+    next_month = (month_start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+
+    spent_query = select(func.sum(ExpenseRequest.amount)).where(
+        ExpenseRequest.user_id == current_user.id,
+        ExpenseRequest.status == ExpenseStatus.PAID,
+        ExpenseRequest.updated_at >= month_start,
+        ExpenseRequest.updated_at < next_month,
+    )
+    amount_spent = float((await db.execute(spent_query)).scalar() or 0)
+
+    org_query = select(Organization).where(Organization.id == current_user.org_id)
+    org_result = await db.execute(org_query)
+    org = org_result.scalar_one_or_none()
+    monthly_limit = float(org.deemed_approval_limit if org else 0.0)
+
+    progress_ratio = 0.0
+    if monthly_limit > 0:
+        progress_ratio = min(amount_spent / monthly_limit, 1.0)
+
+    pending_query = select(func.count(ExpenseRequest.id)).where(
+        ExpenseRequest.user_id == current_user.id,
+        ExpenseRequest.status.in_([ExpenseStatus.PENDING, ExpenseStatus.CLARIFICATION_RESPONDED]),
+    )
+    pending_count = int((await db.execute(pending_query)).scalar() or 0)
+
+    recent_query = (
+        select(ExpenseRequest)
+        .where(ExpenseRequest.user_id == current_user.id)
+        .order_by(ExpenseRequest.created_at.desc())
+        .limit(5)
+    )
+    recent_result = await db.execute(recent_query)
+    recent_requests = recent_result.scalars().all()
+
+    return {
+        "user": {
+            "shortName": current_user.first_name,
+        },
+        "monthlyExpense": {
+            "amountSpent": round(amount_spent, 2),
+            "monthlyLimit": round(monthly_limit, 2),
+            "progressRatio": round(progress_ratio, 4),
+        },
+        "pendingApprovals": {
+            "pendingCount": pending_count,
+        },
+        "recentRequests": [
+            {
+                "id": r.request_id,
+                "purpose": r.purpose,
+                "date": (r.updated_at or r.created_at).isoformat(),
+                "amount": round(float(r.amount), 2),
+                "status": _status_for_requestor_ui(r.status),
+                "category": r.category.value,
+            }
+            for r in recent_requests
+        ],
+    }
+
+
+@router.get("/requests")
+async def get_requestor_requests(
+    search: Optional[str] = None,
+    status: Optional[str] = "All",
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    if current_user.role != UserRole.REQUESTOR:
+        raise HTTPException(status_code=403, detail="Access denied. Requestor role required.")
+
+    query = select(ExpenseRequest).where(ExpenseRequest.user_id == current_user.id)
+
+    selected_status = (status or "All").strip().lower()
+    if selected_status not in ["all", "pending", "clarification", "approved", "rejected", "unpaid"]:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    if selected_status == "pending":
+        query = query.where(ExpenseRequest.status == ExpenseStatus.PENDING)
+    elif selected_status == "clarification":
+        query = query.where(
+            ExpenseRequest.status.in_([ExpenseStatus.CLARIFICATION_REQUIRED, ExpenseStatus.CLARIFICATION_RESPONDED])
+        )
+    elif selected_status == "approved":
+        query = query.where(
+            ExpenseRequest.status.in_([ExpenseStatus.APPROVED, ExpenseStatus.AUTO_APPROVED, ExpenseStatus.PAID])
+        )
+    elif selected_status == "rejected":
+        query = query.where(ExpenseRequest.status == ExpenseStatus.REJECTED)
+    elif selected_status == "unpaid":
+        query = query.where(ExpenseRequest.status.in_([ExpenseStatus.APPROVED, ExpenseStatus.AUTO_APPROVED]))
+
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.where(
+            ExpenseRequest.request_id.ilike(s)
+            | ExpenseRequest.purpose.ilike(s)
+            | ExpenseRequest.description.ilike(s)
+        )
+
+    result = await db.execute(query.order_by(ExpenseRequest.created_at.desc()))
+    rows = result.scalars().all()
+
+    return [
+        {
+            "id": r.request_id,
+            "purpose": r.purpose,
+            "date": (r.updated_at or r.created_at).isoformat(),
+            "category": r.category.value,
+            "amount": round(float(r.amount), 2),
+            "status": _status_for_requestor_ui(r.status),
+            "rejection_reason": r.rejection_reason if r.status == ExpenseStatus.REJECTED else None,
+        }
+        for r in rows
+    ]
 
 @router.get("/history/{expense_id}", response_model=List[ClarificationOut])
 async def get_clarification_history(
@@ -196,6 +341,7 @@ class ClarificationResponseModel(BaseModel):
 async def respond_to_admin(
     expense_id: int, 
     data: ClarificationResponseModel, 
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -232,6 +378,38 @@ async def respond_to_admin(
     expense.status = ExpenseStatus.CLARIFICATION_RESPONDED
     
     await db.commit()
+
+    # Notify all approvers/admins in the org that clarification response was submitted.
+    approver_query = select(User.id).where(
+        User.org_id == current_user.org_id,
+        User.role.in_([UserRole.ADMIN, UserRole.APPROVER]),
+        User.is_active.is_(True),
+    )
+    approver_result = await db.execute(approver_query)
+    approver_ids = [row[0] for row in approver_result.all()]
+
+    if approver_ids:
+        token_query = select(UserDeviceToken.token).where(
+            UserDeviceToken.user_id.in_(approver_ids),
+            UserDeviceToken.is_active.is_(True),
+        )
+        token_result = await db.execute(token_query)
+        target_tokens = [row[0] for row in token_result.all()]
+
+        if target_tokens:
+            background_tasks.add_task(
+                dispatch_push_notifications,
+                tokens=target_tokens,
+                title="Clarification Responded",
+                body=f"Requester responded for expense {expense.request_id}.",
+                data={
+                    "event_type": "clarification_responded",
+                    "expense_id": str(expense.id),
+                    "request_id": expense.request_id,
+                    "status": expense.status.value,
+                },
+            )
+
     return {"msg": "Response submitted successfully"}
 
 @router.post("/upload-receipt/{expense_id}")

@@ -9,7 +9,10 @@ from app.db.base import Base
 # You MUST import all models here so Alembic detects them
 from app.models.user import User 
 from app.models.organization import Organization
+from app.models.department import Department
 from app.models.expense import ExpenseRequest, ClarificationHistory
+from app.models.accounting import DailyBalance
+from app.models.notification import UserDeviceToken
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

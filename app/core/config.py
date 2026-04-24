@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     CLOUDINARY_API_SECRET: str
     CLOUDINARY_FOLDER: str = "petty-cash-receipts"
 
+    # --- Push Notification Configuration (FCM) ---
+    FCM_ENABLED: bool = False
+    FCM_SERVICE_ACCOUNT_FILE: str | None = None
+    FCM_PROJECT_ID: str | None = None
+    FCM_DRY_RUN: bool = False
+    FIREBASE_PROJECT_ID: str | None = None
+    FIREBASE_CLIENT_EMAIL: str | None = None
+    FIREBASE_PRIVATE_KEY: str | None = None
+
     class Config:
         env_file = ".env"
         extra = "allow"  # Allow extra env vars without crashing

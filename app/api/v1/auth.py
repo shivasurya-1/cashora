@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.organization import Organization
+from app.models.department import Department
 from app.schemas.user import UserCreate, UserOut, Token
 from app.schemas.organization import OrganizationSetup  
 from app.core.security import get_password_hash, verify_password, create_access_token
@@ -238,16 +239,34 @@ async def add_staff(
 
     # 2. Generate Credentials
     temp_password = generate_random_password()
+
+    department_id = user_in.department_id
+    if department_id is not None:
+        dep_query = select(Department).where(
+            Department.id == department_id,
+            Department.org_id == current_admin.org_id,
+            Department.is_active == True,
+        )
+        dep_result = await db.execute(dep_query)
+        department = dep_result.scalar_one_or_none()
+        if not department:
+            raise HTTPException(status_code=404, detail="Department not found")
     
     # 3. Create User linked to the Admin's Org
+    try:
+        parsed_role = UserRole(user_in.role.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid role. Allowed: admin, requestor, approver, accountant")
+
     new_user = User(
         email=user_in.email,
         hashed_password=get_password_hash(temp_password),
         first_name=user_in.first_name,
         last_name=user_in.last_name,
         phone_number=user_in.phone_number,
-        role=user_in.role.upper(), # REQUESTOR or ACCOUNTANT
+        role=parsed_role,
         org_id=current_admin.org_id, # AUTO-LINK to same organization
+        department_id=department_id,
         is_active=True
     )
     
