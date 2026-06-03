@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 from typing import Optional, List
 from app.models.expense import ExpenseStatus, ExpenseCategory, ExpenseRequestType, PaymentMethod
 from datetime import datetime
@@ -56,8 +56,25 @@ class ExpenseOut(BaseModel):
     transaction_reference: Optional[str] = None
     status: ExpenseStatus
     created_at: datetime
+    approved_at: Optional[datetime] = None
+    rejected_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
     clarifications: List[ClarificationOut] = []
     requestor: RequestorInfo
+
+    @computed_field
+    @property
+    def requestor_name(self) -> str:
+        if self.requestor:
+            return f"{self.requestor.first_name} {self.requestor.last_name}".strip()
+        return ""
+
+    @computed_field
+    @property
+    def requestor_email(self) -> str:
+        if self.requestor:
+            return self.requestor.email or ""
+        return ""
 
     class Config:
         from_attributes = True

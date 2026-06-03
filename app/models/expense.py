@@ -1,4 +1,5 @@
 import enum
+from typing import Optional
 from sqlalchemy import String, ForeignKey, Float, DateTime, Enum, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -21,6 +22,7 @@ class ExpenseStatus(str, enum.Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     CLARIFICATION_REQUIRED = "clarification_required"
+    
     CLARIFICATION_RESPONDED = "clarification_responded"
     PAID = "paid"
 
@@ -56,10 +58,16 @@ class ExpenseRequest(Base):
     receipt_url: Mapped[str] = mapped_column(String(500), nullable=True) # Bill/Receipt proof
     payment_qr_url: Mapped[str] = mapped_column(String(500), nullable=True) # QR code for payment
     payment_note: Mapped[str] = mapped_column(Text, nullable=True) # Note from requestor for accountant
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # payee/vendor name
 
     # Payment Settlement
     payment_method: Mapped[str] = mapped_column(String(50), nullable=True)  # stores lowercase value e.g. "bank_transfer"
     transaction_reference: Mapped[str] = mapped_column(String(100), nullable=True) # UPI ref / bank txn / cheque no.
+
+    # Workflow timestamps
+    approved_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    rejected_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
     # Tracking
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

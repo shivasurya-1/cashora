@@ -216,6 +216,13 @@ async def update_user(
     # 2. Convert Pydantic model to a dict, EXCLUDING fields not sent in the request
     update_data = user_update.model_dump(exclude_unset=True)
 
+    # Reject email changes — email is immutable via this endpoint
+    if "email" in update_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Email cannot be changed. Contact your organisation admin."
+        )
+
     # 3. Update fields with permission checks
     # Non-admins can only update: first_name, last_name, phone_number
     # Admins can update all fields

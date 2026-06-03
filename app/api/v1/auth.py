@@ -297,6 +297,44 @@ async def add_staff(
 
 from typing import List
 from app.schemas.user import UserListOut
+from sqlalchemy.orm import joinedload as _joinedload2
+
+@router.get("/me")
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Validate JWT and return the current user's profile. Called by Flutter on startup."""
+    query = (
+        select(User)
+        .options(_joinedload2(User.organization), _joinedload2(User.department))
+        .where(User.id == current_user.id)
+    )
+    result = await db.execute(query)
+    user_with_org = result.scalar_one()
+
+    return {
+        "id": user_with_org.id,
+        "email": user_with_org.email,
+        "first_name": user_with_org.first_name,
+        "last_name": user_with_org.last_name,
+        "phone_number": user_with_org.phone_number,
+        "role": user_with_org.role,
+        "org_id": user_with_org.org_id,
+        "is_active": user_with_org.is_active,
+        "org_code": user_with_org.organization.org_code,
+        "org_name": user_with_org.organization.name,
+        "department_id": user_with_org.department.id if user_with_org.department else None,
+        "department_name": user_with_org.department.name if user_with_org.department else None,
+        "department_code": user_with_org.department.code if user_with_org.department else None,
+    }
+
+
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    """Stateless JWT logout. Flutter removes the token client-side."""
+    return {"msg": "Logged out successfully"}
+
 
 @router.get("/users", response_model=list[UserListOut])
 async def get_org_users(

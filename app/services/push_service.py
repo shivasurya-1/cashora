@@ -87,6 +87,14 @@ def send_push_to_tokens(
         tokens=unique_tokens,
         notification=messaging.Notification(title=title, body=body),
         data=payload,
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                channel_id="cashora_push_channel",
+                sound="default",
+                click_action="FLUTTER_NOTIFICATION_CLICK",
+            ),
+        ),
     )
 
     response = messaging.send_each_for_multicast(message, dry_run=settings.FCM_DRY_RUN, app=app)

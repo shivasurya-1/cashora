@@ -28,6 +28,34 @@ alembic upgrade head
 sudo systemctl restart uvicorn-pettycash
 ```
 
+## Fix 413 Request Entity Too Large (Upload Issues)
+
+If you see `413 Request Entity Too Large` for endpoints like `/requestor/submit`, the request is usually being rejected by Nginx before FastAPI receives it.
+
+Set upload size in your Nginx site config:
+
+```bash
+sudo nano /etc/nginx/sites-available/cashora.nxsys.in
+```
+
+Inside the `server { ... }` block, add:
+
+```nginx
+client_max_body_size 15M;
+```
+
+Apply and verify:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+sudo nginx -T | grep -n client_max_body_size
+```
+
+Notes:
+- FastAPI already allows larger files in the upload endpoints.
+- If 413 still occurs, check any additional proxy/CDN/WAF layer body-size limits.
+
 ---
 
 > [!TIP]

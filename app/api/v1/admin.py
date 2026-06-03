@@ -10,6 +10,7 @@ from app.models.expense import ExpenseRequest, ExpenseStatus
 from app.models.user import UserRole, User
 from app.models.department import Department
 from app.core.security import get_current_user
+from app.core.utils import to_ist
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -41,6 +42,12 @@ async def get_admin_dashboard(
     )
     pending_requests = int((await db.execute(pending_query)).scalar() or 0)
 
+    clarification_query = select(func.count(ExpenseRequest.id)).where(
+        ExpenseRequest.org_id == current_user.org_id,
+        ExpenseRequest.status == ExpenseStatus.CLARIFICATION_REQUIRED,
+    )
+    clarification_pending = int((await db.execute(clarification_query)).scalar() or 0)
+
     approved_amount_query = select(func.sum(ExpenseRequest.amount)).where(
         ExpenseRequest.org_id == current_user.org_id,
         ExpenseRequest.status.in_([ExpenseStatus.APPROVED, ExpenseStatus.AUTO_APPROVED, ExpenseStatus.PAID]),
@@ -71,6 +78,7 @@ async def get_admin_dashboard(
         },
         "overview": {
             "pendingRequestsCount": pending_requests,
+            "inClarificationCount": clarification_pending,
             "approvedAmount": round(approved_amount, 2),
         },
         "departmentSummary": {
@@ -92,7 +100,7 @@ async def get_admin_history(
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
 
     query = select(ExpenseRequest).options(
-        selectinload(ExpenseRequest.requestor),
+        selectinload(ExpenseRequest.requestor).selectinload(User.department),
         selectinload(ExpenseRequest.clarifications),
     ).where(
         ExpenseRequest.org_id == current_user.org_id
@@ -153,8 +161,8 @@ async def get_admin_history(
                 "id": c.id,
                 "question": c.question,
                 "response": c.response,
-                "asked_at": c.asked_at.isoformat() if c.asked_at else None,
-                "responded_at": c.responded_at.isoformat() if c.responded_at else None,
+                "asked_at": to_ist(c.asked_at),
+                "responded_at": to_ist(c.responded_at),
             }
             for c in sorted(row.clarifications or [], key=lambda item: item.asked_at or item.responded_at)
         ]
@@ -163,14 +171,137 @@ async def get_admin_history(
             {
                 "id": row.request_id,
                 "request_id": row.request_id,
-                "updated_at": (row.updated_at or row.created_at).isoformat(),
+                "db_id": row.id,
+                "updated_at": to_ist(row.updated_at or row.created_at),
+                "created_at": to_ist(row.created_at),
+                "approved_at": to_ist(row.approved_at),
+                "rejected_at": to_ist(row.rejected_at),
+                "paid_at": to_ist(row.paid_at),
                 "amount": round(float(row.amount), 2),
+                "department": requestor.department.name if requestor and requestor.department else None,
                 "requestor": requestor_info,
+                "requestor_name": user_fallback,
+                "requestor_email": requestor_info["email"],
                 "user": user_fallback,
                 "purpose": row.purpose,
+                "description": row.description,
+                "category": row.category.value if hasattr(row.category, "value") else row.category,
+                "receipt_url": row.receipt_url,
+                "payment_qr_url": row.payment_qr_url,
                 "status": _status_for_admin_history(row.status),
                 "clarification_history": clarification_history,
             }
         )
 
     return history
+
+
+@router.get("/users")
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
+
+    result = await db.execute(
+        select(User).options(selectinload(User.department)).where(
+            User.org_id == current_user.org_id
+        ).order_by(User.first_name)
+    )
+    users = result.scalars().all()
+
+    return [
+        {
+            "id": u.id,
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "full_name": f"{u.first_name} {u.last_name}".strip(),
+            "email": u.email,
+            "role": u.role.value if hasattr(u.role, "value") else u.role,
+            "is_active": u.is_active,
+            "department": (
+                {"id": u.department.id, "name": u.department.name}
+                if u.department else None
+            ),
+        }
+        for u in users
+    ]
+
+
+@router.get("/expenses/{expense_id}")
+async def get_expense_by_id(
+    expense_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Fetch a single expense by DB integer ID or EXP-XXXXXXXX request_id."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
+
+    # Try numeric DB id first, fall back to request_id string
+    if expense_id.isdigit():
+        filter_clause = (ExpenseRequest.id == int(expense_id))
+    else:
+        filter_clause = (ExpenseRequest.request_id == expense_id)
+
+    result = await db.execute(
+        select(ExpenseRequest).options(
+            selectinload(ExpenseRequest.requestor).selectinload(User.department),
+            selectinload(ExpenseRequest.approver),
+            selectinload(ExpenseRequest.clarifications),
+        ).where(
+            filter_clause,
+            ExpenseRequest.org_id == current_user.org_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Expense not found.")
+
+    requestor = row.requestor
+    clarification_history = [
+        {
+            "id": c.id,
+            "question": c.question,
+            "response": c.response,
+            "asked_at": to_ist(c.asked_at),
+            "responded_at": to_ist(c.responded_at),
+        }
+        for c in sorted(row.clarifications or [], key=lambda c: c.asked_at or c.responded_at)
+    ]
+
+    return {
+        "id": row.request_id,
+        "request_id": row.request_id,
+        "db_id": row.id,
+        "created_at": to_ist(row.created_at),
+        "updated_at": to_ist(row.updated_at or row.created_at),
+        "approved_at": to_ist(row.approved_at),
+        "rejected_at": to_ist(row.rejected_at),
+        "paid_at": to_ist(row.paid_at),
+        "amount": round(float(row.amount), 2),
+        "purpose": row.purpose,
+        "description": row.description,
+        "category": row.category.value if hasattr(row.category, "value") else row.category,
+        "request_type": row.request_type.value if hasattr(row.request_type, "value") else row.request_type,
+        "status": row.status.value if hasattr(row.status, "value") else row.status,
+        "rejection_reason": row.rejection_reason,
+        "receipt_url": row.receipt_url,
+        "payment_qr_url": row.payment_qr_url,
+        "payment_method": row.payment_method,
+        "transaction_reference": row.transaction_reference,
+        "department": requestor.department.name if requestor and requestor.department else None,
+        "requestor": {
+            "first_name": requestor.first_name if requestor else "",
+            "last_name": requestor.last_name if requestor else "",
+            "email": requestor.email if requestor else "",
+        },
+        "requestor_name": f"{requestor.first_name} {requestor.last_name}".strip() if requestor else "",
+        "approver": {
+            "first_name": row.approver.first_name,
+            "last_name": row.approver.last_name,
+            "email": row.approver.email,
+        } if row.approver else None,
+        "clarification_history": clarification_history,
+    }

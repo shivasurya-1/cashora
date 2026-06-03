@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class DevicePlatform(str, enum.Enum):
     ANDROID = "android"
     IOS = "ios"
+    WEB = "web"
 
 
 class DeviceRegisterRequest(BaseModel):

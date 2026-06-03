@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.api.v1 import auth, requestor, approver, accountant, profile, admin, department, notifications
+from app.core.config import settings
+from app.api.v1 import auth, requestor, approver, accountant, profile, admin, department, notifications, payments, expenses
 
 app = FastAPI(title="Enterprise Expense Manager", version="1.0.0")
 
@@ -30,7 +31,7 @@ async def validation_exception_handler(request, exc):
 # CORS Settings for Frontend connection
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,6 +45,8 @@ app.include_router(profile.router)
 app.include_router(admin.router)
 app.include_router(department.router)
 app.include_router(notifications.router)
+app.include_router(payments.router)
+app.include_router(expenses.router)
 
 @app.get("/")
 async def health_check():

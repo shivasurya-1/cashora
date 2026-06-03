@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from typing import List
 
 class Settings(BaseSettings):
     # Existing Database & Security
@@ -6,6 +7,17 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    # CORS — comma-separated list of allowed origins, e.g.
+    # ALLOWED_ORIGINS=https://app.cashora.com,https://staging.cashora.com
+    # Defaults to ["*"] so local dev works out of the box.
+    ALLOWED_ORIGINS: str = "*"
+
+    @property
+    def cors_origins(self) -> List[str]:
+        if self.ALLOWED_ORIGINS.strip() == "*":
+            return ["*"]
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     # --- SMTP Configuration ---
     SMTP_USERNAME: str

@@ -31,7 +31,8 @@ class ExpenseService:
             request_id=request_id,
             status=approval_status,
             user_id=user_id,
-            org_id=org_id
+            org_id=org_id,
+            approved_at=datetime.utcnow() if approval_status == ExpenseStatus.AUTO_APPROVED else None,
         )
 
         db.add(new_expense)

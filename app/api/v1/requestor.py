@@ -143,49 +143,165 @@ async def get_requestor_requests(
             | ExpenseRequest.description.ilike(s)
         )
 
+    query = query.options(selectinload(ExpenseRequest.clarifications))
     result = await db.execute(query.order_by(ExpenseRequest.created_at.desc()))
     rows = result.scalars().all()
 
     return [
         {
             "id": r.request_id,
+            "db_id": r.id,
+            "requestor": {
+                "first_name": current_user.first_name,
+                "last_name": current_user.last_name,
+                "email": current_user.email,
+            },
+            "requestor_name": f"{current_user.first_name} {current_user.last_name}".strip(),
+            "requestor_email": current_user.email,
+            "request_type": r.request_type.value if hasattr(r.request_type, 'value') else r.request_type,
             "purpose": r.purpose,
+            "description": r.description,
             "date": (r.updated_at or r.created_at).isoformat(),
-            "category": r.category.value,
+            "created_at": r.created_at.isoformat(),
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "category": r.category.value if hasattr(r.category, 'value') else r.category,
             "amount": round(float(r.amount), 2),
             "status": _status_for_requestor_ui(r.status),
-            "rejection_reason": r.rejection_reason if r.status == ExpenseStatus.REJECTED else None,
+            "raw_status": r.status.value if hasattr(r.status, 'value') else r.status,
+            "rejection_reason": r.rejection_reason,
+            "receipt_url": r.receipt_url,
+            "payment_qr_url": r.payment_qr_url,
+            "payment_note": r.payment_note,
+            "payment_method": r.payment_method.value if hasattr(r.payment_method, 'value') else r.payment_method,
+            "transaction_reference": r.transaction_reference,
+            "clarifications": [
+                {
+                    "id": h.id,
+                    "question": h.question,
+                    "response": h.response,
+                    "asked_at": h.asked_at.isoformat(),
+                    "responded_at": h.responded_at.isoformat() if h.responded_at else None,
+                }
+                for h in (r.clarifications or [])
+            ],
         }
         for r in rows
     ]
 
-@router.get("/history/{expense_id}", response_model=List[ClarificationOut])
+
+@router.get("/requests/{request_id}")
+async def get_request_by_id(
+    request_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Fetch a single request by DB integer ID or EXP-XXXXXXXX string."""
+    if current_user.role != UserRole.REQUESTOR:
+        raise HTTPException(status_code=403, detail="Access denied. Requestor role required.")
+
+    if request_id.isdigit():
+        filter_clause = (ExpenseRequest.id == int(request_id))
+    else:
+        filter_clause = (ExpenseRequest.request_id == request_id)
+
+    result = await db.execute(
+        select(ExpenseRequest).options(
+            selectinload(ExpenseRequest.clarifications),
+        ).where(
+            filter_clause,
+            ExpenseRequest.user_id == current_user.id,
+        )
+    )
+    r = result.scalar_one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Request not found.")
+
+    return {
+        "id": r.request_id,
+        "db_id": r.id,
+        "requestor": {
+            "first_name": current_user.first_name,
+            "last_name": current_user.last_name,
+            "email": current_user.email,
+        },
+        "requestor_name": f"{current_user.first_name} {current_user.last_name}".strip(),
+        "requestor_email": current_user.email,
+        "request_type": r.request_type.value if hasattr(r.request_type, "value") else r.request_type,
+        "purpose": r.purpose,
+        "description": r.description,
+        "date": (r.updated_at or r.created_at).isoformat(),
+        "created_at": r.created_at.isoformat(),
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+        "rejected_at": r.rejected_at.isoformat() if r.rejected_at else None,
+        "paid_at": r.paid_at.isoformat() if r.paid_at else None,
+        "category": r.category.value if hasattr(r.category, "value") else r.category,
+        "amount": round(float(r.amount), 2),
+        "status": _status_for_requestor_ui(r.status),
+        "raw_status": r.status.value if hasattr(r.status, "value") else r.status,
+        "rejection_reason": r.rejection_reason,
+        "receipt_url": r.receipt_url,
+        "payment_qr_url": r.payment_qr_url,
+        "payment_note": r.payment_note,
+        "payment_method": r.payment_method.value if hasattr(r.payment_method, "value") else r.payment_method,
+        "transaction_reference": r.transaction_reference,
+        "clarifications": [
+            {
+                "id": h.id,
+                "question": h.question,
+                "response": h.response,
+                "asked_at": h.asked_at.isoformat(),
+                "responded_at": h.responded_at.isoformat() if h.responded_at else None,
+            }
+            for h in (r.clarifications or [])
+        ],
+    }
+
+
+@router.get("/history/{request_id}")
 async def get_clarification_history(
-    expense_id: int, 
+    request_id: str,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     """
     Get clarification history (Q&A) for a specific expense.
-    Ensures the user owns the expense.
+    Accepts request_id string (e.g. EXP-77BD1000) or numeric id.
     """
-    # Verify ownership
-    expense_query = select(ExpenseRequest).where(
-        ExpenseRequest.id == expense_id,
-        ExpenseRequest.user_id == current_user.id
-    )
+    # Support both string request_id and numeric id
+    if request_id.isdigit():
+        expense_query = select(ExpenseRequest).where(
+            ExpenseRequest.id == int(request_id),
+            ExpenseRequest.user_id == current_user.id
+        )
+    else:
+        expense_query = select(ExpenseRequest).where(
+            ExpenseRequest.request_id == request_id,
+            ExpenseRequest.user_id == current_user.id
+        )
     result = await db.execute(expense_query)
     expense = result.scalar_one_or_none()
-    
+
     if not expense:
-         raise HTTPException(status_code=404, detail="Expense not found or access denied")
+        raise HTTPException(status_code=404, detail="Expense not found or access denied")
 
     query = select(ClarificationHistory).where(
-        ClarificationHistory.expense_id == expense_id
+        ClarificationHistory.expense_id == expense.id
     ).order_by(ClarificationHistory.asked_at.asc())
-    
+
     result = await db.execute(query)
-    return result.scalars().all()
+    rows = result.scalars().all()
+    return [
+        {
+            "id": h.id,
+            "expense_id": h.expense_id,
+            "question": h.question,
+            "response": h.response,
+            "asked_at": h.asked_at.isoformat(),
+            "responded_at": h.responded_at.isoformat() if h.responded_at else None,
+        }
+        for h in rows
+    ]
 
 @router.get("/categories")
 async def get_expense_categories():
@@ -337,31 +453,38 @@ async def get_my_requests(
 class ClarificationResponseModel(BaseModel):
     response_text: str
 
-@router.post("/respond-clarification/{expense_id}")
+@router.post("/respond-clarification/{request_id}")
 async def respond_to_admin(
-    expense_id: int, 
-    data: ClarificationResponseModel, 
+    request_id: str,
+    data: ClarificationResponseModel,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     """
     Respond to the latest clarification question for an expense.
+    Accepts request_id string (e.g. EXP-77BD1000) or numeric id.
     """
-    # Verify ownership
-    expense_query = select(ExpenseRequest).where(
-        ExpenseRequest.id == expense_id,
-        ExpenseRequest.user_id == current_user.id
-    )
+    # Support both string request_id and numeric id
+    if request_id.isdigit():
+        expense_query = select(ExpenseRequest).where(
+            ExpenseRequest.id == int(request_id),
+            ExpenseRequest.user_id == current_user.id
+        )
+    else:
+        expense_query = select(ExpenseRequest).where(
+            ExpenseRequest.request_id == request_id,
+            ExpenseRequest.user_id == current_user.id
+        )
     result = await db.execute(expense_query)
     expense = result.scalar_one_or_none()
-    
+
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found or access denied")
-    
+
     # Find the latest unanswered clarification
     query = select(ClarificationHistory).where(
-        ClarificationHistory.expense_id == expense_id,
+        ClarificationHistory.expense_id == expense.id,
         ClarificationHistory.response == None
     ).order_by(ClarificationHistory.asked_at.desc())
     
@@ -369,7 +492,10 @@ async def respond_to_admin(
     history = result.scalars().first()
     
     if not history:
-        raise HTTPException(status_code=404, detail="No pending clarification found for this expense")
+        raise HTTPException(
+            status_code=400,
+            detail="No pending question to answer. Wait for the approver to ask another clarification."
+        )
 
     history.response = data.response_text
     history.responded_at = datetime.datetime.now()

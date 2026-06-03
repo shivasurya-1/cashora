@@ -10,6 +10,7 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     org_code: Mapped[str] = mapped_column(String(20), unique=True, index=True) # Unique identifier
     deemed_approval_limit: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Auto-approve if amount <= this
+    opening_balance: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)  # Organisation's opening cash balance
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     # Relationship to users
