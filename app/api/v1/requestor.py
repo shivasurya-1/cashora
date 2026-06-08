@@ -6,7 +6,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 from typing import List, Optional
 from app.db.session import get_db
-from app.models.expense import ExpenseRequest, ExpenseCategory, ExpenseStatus, ClarificationHistory
+from app.models.expense import ExpenseRequest, ExpenseStatus, ClarificationHistory
+from app.models.category import Category
 from app.models.notification import UserDeviceToken
 from app.models.organization import Organization
 from app.models.user import User, UserRole
@@ -97,7 +98,7 @@ async def get_requestor_dashboard(
                 "date": (r.updated_at or r.created_at).isoformat(),
                 "amount": round(float(r.amount), 2),
                 "status": _status_for_requestor_ui(r.status),
-                "category": r.category.value,
+                "category": r.category.value if hasattr(r.category, "value") else r.category,
             }
             for r in recent_requests
         ],
@@ -304,9 +305,18 @@ async def get_clarification_history(
     ]
 
 @router.get("/categories")
-async def get_expense_categories():
-    """Get list of available expense categories"""
-    return [category.value for category in ExpenseCategory]
+async def get_expense_categories(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    """Get list of active expense category slugs for the org."""
+    result = await db.execute(
+        select(Category.slug).where(
+            Category.org_id == current_user.org_id,
+            Category.is_active.is_(True),
+        ).order_by(Category.name.asc())
+    )
+    return [row[0] for row in result.all()]
 
 @router.post("/submit", response_model=ExpenseOut)
 async def submit_expense(
@@ -391,11 +401,25 @@ async def submit_expense(
     if rt == "post_approved" and not receipt_url:
         raise HTTPException(status_code=400, detail="Receipt required for post_approved requests.")
 
+    category_slug = (category or "").strip().lower()
+    if not category_slug:
+        raise HTTPException(status_code=400, detail="Category is required.")
+
+    category_result = await db.execute(
+        select(Category.id).where(
+            Category.org_id == current_user.org_id,
+            Category.slug == category_slug,
+            Category.is_active.is_(True),
+        )
+    )
+    if not category_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Invalid category.")
+
     try:
         expense_data = ExpenseCreate(
             amount=amount,
             purpose=purpose,
-            category=category,
+            category=category_slug,
             request_type=request_type,
             description=description,
             receipt_url=receipt_url,

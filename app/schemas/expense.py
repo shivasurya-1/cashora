@@ -1,6 +1,6 @@
 from pydantic import BaseModel, computed_field
 from typing import Optional, List
-from app.models.expense import ExpenseStatus, ExpenseCategory, ExpenseRequestType, PaymentMethod
+from app.models.expense import ExpenseStatus, ExpenseRequestType, PaymentMethod
 from datetime import datetime
 
 # --- Existing Requestor Schemas ---
@@ -10,7 +10,7 @@ class ExpenseCreate(BaseModel):
     amount: float
     purpose: str
     description: Optional[str] = None
-    category: ExpenseCategory
+    category: str
     receipt_url: Optional[str] = None
     payment_qr_url: Optional[str] = None
     payment_note: Optional[str] = None
@@ -48,7 +48,7 @@ class ExpenseOut(BaseModel):
     amount: float
     purpose: str
     description: Optional[str] = None
-    category: ExpenseCategory
+    category: str
     receipt_url: Optional[str] = None
     payment_qr_url: Optional[str] = None
     payment_note: Optional[str] = None

@@ -11,7 +11,7 @@ import datetime
 
 from pydantic import BaseModel, Field
 from app.db.session import get_db
-from app.models.expense import ExpenseRequest, ExpenseStatus, PaymentMethod, ExpenseCategory
+from app.models.expense import ExpenseRequest, ExpenseStatus, PaymentMethod
 from app.models.notification import UserDeviceToken
 from app.models.organization import Organization
 from app.models.accounting import DailyBalance
@@ -782,11 +782,7 @@ async def get_reports_summary(
     if month:
         base_filters.append(extract("month", ExpenseRequest.created_at) == month)
     if category:
-        try:
-            cat = ExpenseCategory(category.lower())
-            base_filters.append(ExpenseRequest.category == cat)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+        base_filters.append(ExpenseRequest.category == category.lower())
 
     # Total + count
     total_q = select(
@@ -802,7 +798,10 @@ async def get_reports_summary(
         func.coalesce(func.sum(ExpenseRequest.amount), 0.0),
     ).where(*base_filters).group_by(ExpenseRequest.category)
     cat_result = await db.execute(cat_q)
-    by_category = {row[0].value: round(float(row[1]), 2) for row in cat_result.all()}
+    by_category = {
+        (row[0].value if hasattr(row[0], "value") else row[0]): round(float(row[1]), 2)
+        for row in cat_result.all()
+    }
 
     # By status
     status_q = select(
@@ -836,7 +835,7 @@ async def get_spend_analytics(
     Flexible analytics endpoint.
     time_range: '30d', '90d', '180d', '1y' — defaults to all-time.
     department: department name filter.
-    category: ExpenseCategory value filter.
+    category: category slug filter.
     """
     if current_user.role != UserRole.ACCOUNTANT:
         raise HTTPException(status_code=403, detail="Access denied. Accountant role required.")
@@ -860,11 +859,7 @@ async def get_spend_analytics(
 
     # Category filter
     if category:
-        try:
-            cat = ExpenseCategory(category.lower())
-            base_filters.append(ExpenseRequest.category == cat)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+        base_filters.append(ExpenseRequest.category == category.lower())
 
     # Department filter (join through requestor → user.department_id)
     if department:
@@ -893,7 +888,10 @@ async def get_spend_analytics(
         func.coalesce(func.sum(ExpenseRequest.amount), 0.0),
     ).where(*base_filters).group_by(ExpenseRequest.category)
     cat_rows = (await db.execute(cat_q)).all()
-    by_category = {row[0].value: round(float(row[1]), 2) for row in cat_rows}
+    by_category = {
+        (row[0].value if hasattr(row[0], "value") else row[0]): round(float(row[1]), 2)
+        for row in cat_rows
+    }
 
     # By period (monthly breakdown)
     period_q = select(
@@ -969,11 +967,7 @@ async def export_expenses_csv(
         except ValueError:
             raise HTTPException(status_code=400, detail="end_date must be YYYY-MM-DD")
     if category:
-        try:
-            cat = ExpenseCategory(category.lower())
-            base_filters.append(ExpenseRequest.category == cat)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+        base_filters.append(ExpenseRequest.category == category.lower())
 
     result = await db.execute(
         select(ExpenseRequest)
@@ -997,7 +991,7 @@ async def export_expenses_csv(
         writer.writerow([
             e.request_id,
             e.purpose,
-            e.category.value,
+            e.category.value if hasattr(e.category, "value") else e.category,
             round(float(e.amount), 2),
             e.status.value,
             e.request_type.value,
@@ -1060,11 +1054,7 @@ async def export_expenses_pdf(
         except ValueError:
             raise HTTPException(status_code=400, detail="end_date must be YYYY-MM-DD")
     if category:
-        try:
-            cat = ExpenseCategory(category.lower())
-            base_filters.append(ExpenseRequest.category == cat)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+        base_filters.append(ExpenseRequest.category == category.lower())
 
     result = await db.execute(
         select(ExpenseRequest)
@@ -1096,7 +1086,7 @@ async def export_expenses_pdf(
         data.append([
             e.request_id,
             e.purpose[:40] + ("…" if len(e.purpose) > 40 else ""),
-            e.category.value,
+            e.category.value if hasattr(e.category, "value") else e.category,
             f"{round(float(e.amount), 2):,.2f}",
             e.status.value,
             requestor_name,

@@ -30,13 +30,6 @@ class ExpenseRequestType(str, enum.Enum):
     PRE_APPROVED = "pre_approved"   # Request amount first, then purchase after approval
     POST_APPROVED = "post_approved"  # Pay first, then upload bill for reimbursement
 
-class ExpenseCategory(str, enum.Enum):
-    TRAVEL = "travel"
-    MEALS = "meals"
-    SOFTWARE = "software"
-    OFFICE_SUPPLIES = "office_supplies"
-    OTHERS = "others"
-
 class ExpenseRequest(Base):
     __tablename__ = "expense_requests"
 
@@ -48,7 +41,7 @@ class ExpenseRequest(Base):
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     purpose: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, nullable=True)
-    category: Mapped[ExpenseCategory] = mapped_column(Enum(ExpenseCategory))
+    category: Mapped[str] = mapped_column(String(100))
     
     # Status & Workflow
     status: Mapped[ExpenseStatus] = mapped_column(Enum(ExpenseStatus), default=ExpenseStatus.PENDING)
