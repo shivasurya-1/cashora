@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.organization import Organization
 from app.models.department import Department
+from app.models.branch import Branch
 from app.schemas.user import UserCreate, UserOut, Token
 from app.schemas.organization import OrganizationSetup  
 from app.core.security import get_password_hash, verify_password, create_access_token
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta
 from fastapi import BackgroundTasks
 from app.schemas.user import ForgotPasswordRequest
 from app.schemas.user import OTPVerifyRequest, UserCreateByAdmin
+from app.core.roles import can_assign_role, enforce_branch_scope, is_admin_like
 
 # Utilities and Services
 from app.utils.codes import generate_org_code, generate_random_password
@@ -43,14 +45,14 @@ async def setup_organization(
     db.add(new_org)
     await db.flush() 
 
-    # 3. Create Admin User (Backend forces role=ADMIN)
+    # 3. Create owner user (Backend forces role=SUPER_ADMIN)
     admin_user = User(
         email=org_in.admin_details.email,
         hashed_password=get_password_hash(temp_password), # Hash the random password
         first_name=org_in.admin_details.first_name,
         last_name=org_in.admin_details.last_name,
         phone_number=org_in.admin_details.phone_number,
-        role=UserRole.ADMIN, # Forced by backend
+        role=UserRole.SUPER_ADMIN,
         org_id=new_org.id
     )
     db.add(admin_user)
@@ -234,11 +236,15 @@ async def add_staff(
     db: AsyncSession = Depends(get_db)
 ):
     # 1. Security Check: Only Admins can add staff
-    if current_admin.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Only Admins can add staff members")
+    if not is_admin_like(current_admin):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     # 2. Generate Credentials
     temp_password = generate_random_password()
+
+    normalized_role = (user_in.role or "").strip().lower()
+    if not can_assign_role(str(current_admin.role), normalized_role):
+        raise HTTPException(status_code=403, detail="You are not allowed to assign this role")
 
     department_id = user_in.department_id
     if department_id is not None:
@@ -251,12 +257,23 @@ async def add_staff(
         department = dep_result.scalar_one_or_none()
         if not department:
             raise HTTPException(status_code=404, detail="Department not found")
+
+    effective_branch_id = enforce_branch_scope(current_admin, user_in.branch_id)
+    if effective_branch_id is not None:
+        branch_query = select(Branch).where(
+            Branch.id == effective_branch_id,
+            Branch.org_id == current_admin.org_id,
+            Branch.is_active.is_(True),
+        )
+        branch_result = await db.execute(branch_query)
+        if not branch_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Branch not found")
     
     # 3. Create User linked to the Admin's Org
     try:
-        parsed_role = UserRole(user_in.role.lower())
+        parsed_role = UserRole(normalized_role)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid role. Allowed: admin, requestor, approver, accountant")
+        raise HTTPException(status_code=400, detail="Invalid role. Allowed: super_admin, admin, requestor, approver, accountant")
 
     new_user = User(
         email=user_in.email,
@@ -267,6 +284,7 @@ async def add_staff(
         role=parsed_role,
         org_id=current_admin.org_id, # AUTO-LINK to same organization
         department_id=department_id,
+        branch_id=effective_branch_id,
         is_active=True
     )
     
@@ -307,7 +325,7 @@ async def get_current_user_info(
     """Validate JWT and return the current user's profile. Called by Flutter on startup."""
     query = (
         select(User)
-        .options(_joinedload2(User.organization), _joinedload2(User.department))
+        .options(_joinedload2(User.organization), _joinedload2(User.department), _joinedload2(User.branch))
         .where(User.id == current_user.id)
     )
     result = await db.execute(query)
@@ -327,6 +345,9 @@ async def get_current_user_info(
         "department_id": user_with_org.department.id if user_with_org.department else None,
         "department_name": user_with_org.department.name if user_with_org.department else None,
         "department_code": user_with_org.department.code if user_with_org.department else None,
+        "branch_id": user_with_org.branch.id if user_with_org.branch else None,
+        "branch_name": user_with_org.branch.name if user_with_org.branch else None,
+        "branch_code": user_with_org.branch.code if user_with_org.branch else None,
     }
 
 
@@ -336,25 +357,32 @@ async def logout(current_user: User = Depends(get_current_user)):
     return {"msg": "Logged out successfully"}
 
 
-@router.get("/users", response_model=list[UserListOut])
+@router.get("/users")
 async def get_org_users(
+    branch_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # 🛡️ SECURITY GATE: Only allow ADMIN role
-    if current_user.role != UserRole.ADMIN:
+    # 🛡️ SECURITY GATE: Only allow admin/super admin role
+    if not is_admin_like(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Access Denied: Only Admins can view the organization staff list."
         )
 
+    effective_branch_id = enforce_branch_scope(current_user, branch_id)
+
     # 🏢 MULTI-TENANCY: Only fetch users from the Admin's own organization
     print(f"DEBUG: Fetching users for org_id: {current_user.org_id}")
     query = (
         select(User)
+        .options(_joinedload2(User.department), _joinedload2(User.branch))
         .where(User.org_id == current_user.org_id)
         .order_by(User.created_at.desc())
     )
+    if effective_branch_id is not None:
+        query = query.where(User.branch_id == effective_branch_id)
+
     result = await db.execute(query)
     users = result.scalars().all()
     
@@ -362,4 +390,21 @@ async def get_org_users(
     for user in users:
         print(f"  - User: {user.email}, org_id: {user.org_id}")
 
-    return users
+    return [
+        {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "role": user.role,
+            "department_id": user.department_id,
+            "department_name": user.department.name if user.department else None,
+            "branch_id": user.branch_id,
+            "branch_name": user.branch.name if user.branch else None,
+            "phone_number": user.phone_number,
+            "is_active": user.is_active,
+            "org_id": user.org_id,
+            "created_at": user.created_at,
+        }
+        for user in users
+    ]

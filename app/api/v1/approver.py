@@ -12,6 +12,7 @@ from app.models.user import UserRole, User
 from app.schemas.expense import ExpenseOut, ClarificationCreate
 from app.services.push_service import dispatch_push_notifications
 from app.core.security import get_current_user
+from app.core.roles import enforce_branch_scope, is_admin_like
 from app.core.utils import to_ist
 import datetime
 
@@ -25,17 +26,33 @@ class ClarificationRequest(BaseModel):
 async def get_org_expenses(
     status: str = None,
     payment_status: str = None,
+    branch_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role not in [UserRole.ADMIN, UserRole.APPROVER]:
+    if str(current_user.role) not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value, UserRole.APPROVER.value]:
         raise HTTPException(status_code=403, detail="Access denied. Approver privileges required.")
+
+    effective_branch_id = None
+    if is_admin_like(current_user):
+        effective_branch_id = enforce_branch_scope(current_user, branch_id)
+    else:
+        if branch_id is not None and branch_id != current_user.branch_id:
+            raise HTTPException(status_code=403, detail="Cannot access another branch.")
+        effective_branch_id = current_user.branch_id
 
     query = select(ExpenseRequest).options(
         selectinload(ExpenseRequest.clarifications),
         selectinload(ExpenseRequest.requestor).selectinload(User.department),
         selectinload(ExpenseRequest.approver),
     ).where(ExpenseRequest.org_id == current_user.org_id)
+
+    if effective_branch_id is not None:
+        query = query.where(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
 
     if status and status.lower() != "all":
         s = status.lower()
@@ -106,16 +123,32 @@ async def get_org_expenses(
 
 @router.get("/dashboard-stats")
 async def get_approver_stats(db: AsyncSession = Depends(get_db), current_user = Depends(get_current_user)):
+    effective_branch_id = current_user.branch_id
+
     # Count pending requests in this org assigned to this approver
     pending_query = select(func.count(ExpenseRequest.id)).where(
         ExpenseRequest.org_id == current_user.org_id,
         ExpenseRequest.status.in_([ExpenseStatus.PENDING, ExpenseStatus.CLARIFICATION_RESPONDED]),
     )
+
+    if effective_branch_id is not None:
+        pending_query = pending_query.where(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
+
     # Sum of approved amounts by this admin
     approved_amount_query = select(func.sum(ExpenseRequest.amount)).where(
         ExpenseRequest.approver_id == current_user.id,
         ExpenseRequest.status == ExpenseStatus.APPROVED
     )
+    if effective_branch_id is not None:
+        approved_amount_query = approved_amount_query.where(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
     
     pending_count = (await db.execute(pending_query)).scalar() or 0
     total_approved = (await db.execute(approved_amount_query)).scalar() or 0
@@ -153,7 +186,7 @@ async def approve_or_reject_expense(
     Approve or reject an expense request.
     """
     # 1. Role Check
-    if current_user.role not in [UserRole.ADMIN, UserRole.APPROVER]:
+    if str(current_user.role) not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value, UserRole.APPROVER.value]:
         raise HTTPException(
             status_code=403, 
             detail="Access denied. Only Admin or Approver can approve/reject expense requests."
@@ -265,7 +298,7 @@ async def ask_clarification(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role not in [UserRole.ADMIN, UserRole.APPROVER]:
+    if str(current_user.role) not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value, UserRole.APPROVER.value]:
         raise HTTPException(status_code=403, detail="Access denied. Admin or Approver role required.")
     # Create history record
     new_chat = ClarificationHistory(
@@ -315,7 +348,7 @@ async def get_clarification_history(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role not in [UserRole.ADMIN, UserRole.APPROVER]:
+    if str(current_user.role) not in [UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value, UserRole.APPROVER.value]:
         raise HTTPException(status_code=403, detail="Access denied. Admin or Approver role required.")
 
     # Load the expense with requestor and approver to get names

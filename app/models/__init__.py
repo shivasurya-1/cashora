@@ -2,6 +2,7 @@
 from app.models.user import User, UserRole
 from app.models.organization import Organization
 from app.models.department import Department
+from app.models.branch import Branch
 from app.models.expense import ExpenseRequest, ExpenseStatus, ExpenseRequestType, ClarificationHistory
 from app.models.category import Category
 from app.models.accounting import DailyBalance
@@ -12,6 +13,7 @@ __all__ = [
     "UserRole",
     "Organization",
     "Department",
+    "Branch",
     "ExpenseRequest",
     "ExpenseStatus",
     "ExpenseRequestType",

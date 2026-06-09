@@ -1,11 +1,12 @@
 import enum
-from sqlalchemy import String, ForeignKey, Boolean, Enum
+from sqlalchemy import String, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from datetime import datetime, timezone
 from sqlalchemy import DateTime
 
 class UserRole(str, enum.Enum):
+    SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
     REQUESTOR = "requestor"
     APPROVER = "approver"
@@ -20,16 +21,18 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String(50))
     last_name: Mapped[str] = mapped_column(String(50))
     phone_number: Mapped[str] = mapped_column(String(20), nullable=True)
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole, native_enum=False), default=UserRole.REQUESTOR)
+    role: Mapped[str] = mapped_column(String(20), default=UserRole.REQUESTOR.value)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     
     # Foreign Keys
     org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), nullable=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=True)
     
     # Relationships
     organization: Mapped["Organization"] = relationship(back_populates="users")
     department: Mapped["Department"] = relationship("Department", back_populates="users")
+    branch: Mapped["Branch"] = relationship("Branch", back_populates="users")
     device_tokens: Mapped[list["UserDeviceToken"]] = relationship("UserDeviceToken", back_populates="user")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 

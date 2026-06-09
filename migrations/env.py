@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.user import User 
 from app.models.organization import Organization
 from app.models.department import Department
+from app.models.branch import Branch
 from app.models.expense import ExpenseRequest, ClarificationHistory
 from app.models.category import Category
 from app.models.accounting import DailyBalance

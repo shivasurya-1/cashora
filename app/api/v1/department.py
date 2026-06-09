@@ -7,6 +7,7 @@ from sqlalchemy import func
 from app.db.session import get_db
 from app.models.department import Department
 from app.models.user import User, UserRole
+from app.core.roles import is_admin_like
 from app.core.security import get_current_user
 
 
@@ -64,7 +65,7 @@ async def create_department(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Only admins can create departments")
 
     name = _normalize_text(payload.name)
@@ -146,7 +147,7 @@ async def update_department(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Only admins can update departments")
 
     query = select(Department).where(
@@ -194,7 +195,7 @@ async def delete_department(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Only admins can delete departments")
 
     query = select(Department).where(
@@ -259,7 +260,7 @@ async def seed_default_departments(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Only admins can seed departments")
 
     existing_query = select(Department).where(Department.org_id == current_user.org_id)

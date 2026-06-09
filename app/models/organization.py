@@ -16,3 +16,4 @@ class Organization(Base):
     # Relationship to users
     users: Mapped[list["User"]] = relationship(back_populates="organization")
     departments: Mapped[list["Department"]] = relationship(back_populates="organization")
+    branches: Mapped[list["Branch"]] = relationship(back_populates="organization")

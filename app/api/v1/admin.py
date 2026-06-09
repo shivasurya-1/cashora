@@ -10,6 +10,7 @@ from app.models.expense import ExpenseRequest, ExpenseStatus
 from app.models.user import UserRole, User
 from app.models.department import Department
 from app.core.security import get_current_user
+from app.core.roles import enforce_branch_scope, is_admin_like
 from app.core.utils import to_ist
 
 
@@ -30,27 +31,36 @@ def _status_for_admin_history(status: ExpenseStatus) -> str:
 
 @router.get("/dashboard")
 async def get_admin_dashboard(
+    branch_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
+
+    effective_branch_id = enforce_branch_scope(current_user, branch_id)
+    branch_user_filter = []
+    if effective_branch_id is not None:
+        branch_user_filter.append(ExpenseRequest.user_id.in_(select(User.id).where(User.branch_id == effective_branch_id)))
 
     pending_query = select(func.count(ExpenseRequest.id)).where(
         ExpenseRequest.org_id == current_user.org_id,
         ExpenseRequest.status.in_([ExpenseStatus.PENDING, ExpenseStatus.CLARIFICATION_RESPONDED]),
+        *branch_user_filter,
     )
     pending_requests = int((await db.execute(pending_query)).scalar() or 0)
 
     clarification_query = select(func.count(ExpenseRequest.id)).where(
         ExpenseRequest.org_id == current_user.org_id,
         ExpenseRequest.status == ExpenseStatus.CLARIFICATION_REQUIRED,
+        *branch_user_filter,
     )
     clarification_pending = int((await db.execute(clarification_query)).scalar() or 0)
 
     approved_amount_query = select(func.sum(ExpenseRequest.amount)).where(
         ExpenseRequest.org_id == current_user.org_id,
         ExpenseRequest.status.in_([ExpenseStatus.APPROVED, ExpenseStatus.AUTO_APPROVED, ExpenseStatus.PAID]),
+        *branch_user_filter,
     )
     approved_amount = float((await db.execute(approved_amount_query)).scalar() or 0)
 
@@ -70,6 +80,8 @@ async def get_admin_dashboard(
         User.is_active == True,
         User.department_id == None,
     )
+    if effective_branch_id is not None:
+        unassigned_users_query = unassigned_users_query.where(User.branch_id == effective_branch_id)
     unassigned_users = int((await db.execute(unassigned_users_query)).scalar() or 0)
 
     return {
@@ -93,11 +105,14 @@ async def get_admin_dashboard(
 async def get_admin_history(
     search: Optional[str] = None,
     status: Optional[str] = "All",
+    branch_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
+
+    effective_branch_id = enforce_branch_scope(current_user, branch_id)
 
     query = select(ExpenseRequest).options(
         selectinload(ExpenseRequest.requestor).selectinload(User.department),
@@ -105,6 +120,12 @@ async def get_admin_history(
     ).where(
         ExpenseRequest.org_id == current_user.org_id
     )
+    if effective_branch_id is not None:
+        query = query.where(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
 
     selected_status = (status or "All").strip().lower()
     if selected_status not in ["all", "approved", "auto_approved", "rejected", "clarification"]:
@@ -198,17 +219,22 @@ async def get_admin_history(
 
 @router.get("/users")
 async def list_users(
+    branch_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
 
-    result = await db.execute(
-        select(User).options(selectinload(User.department)).where(
-            User.org_id == current_user.org_id
-        ).order_by(User.first_name)
+    effective_branch_id = enforce_branch_scope(current_user, branch_id)
+
+    query = select(User).options(selectinload(User.department), selectinload(User.branch)).where(
+        User.org_id == current_user.org_id
     )
+    if effective_branch_id is not None:
+        query = query.where(User.branch_id == effective_branch_id)
+
+    result = await db.execute(query.order_by(User.first_name))
     users = result.scalars().all()
 
     return [
@@ -224,6 +250,12 @@ async def list_users(
                 {"id": u.department.id, "name": u.department.name}
                 if u.department else None
             ),
+            "branch": (
+                {"id": u.branch.id, "name": u.branch.name, "code": u.branch.code}
+                if u.branch else None
+            ),
+            "branch_id": u.branch_id,
+            "branch_name": u.branch.name if u.branch else None,
         }
         for u in users
     ]
@@ -236,7 +268,7 @@ async def get_expense_by_id(
     current_user=Depends(get_current_user),
 ):
     """Fetch a single expense by DB integer ID or EXP-XXXXXXXX request_id."""
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
 
     # Try numeric DB id first, fall back to request_id string

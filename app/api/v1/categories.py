@@ -7,6 +7,7 @@ import re
 from app.db.session import get_db
 from app.models.category import Category
 from app.models.user import User, UserRole
+from app.core.roles import is_admin_like
 from app.core.security import get_current_user
 
 router = APIRouter(prefix="/categories", tags=["categories"])
@@ -79,7 +80,7 @@ async def list_categories(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     query = select(Category).where(Category.org_id == current_user.org_id)
@@ -107,7 +108,7 @@ async def get_category(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     result = await db.execute(
@@ -135,7 +136,7 @@ async def create_category(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     name = _normalize_text(payload.name)
@@ -176,7 +177,7 @@ async def update_category(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     result = await db.execute(
@@ -229,7 +230,7 @@ async def delete_category(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     result = await db.execute(
@@ -253,7 +254,7 @@ async def seed_default_categories(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if current_user.role != UserRole.ADMIN:
+    if not is_admin_like(current_user):
         raise HTTPException(status_code=403, detail="Admin access required.")
 
     created = []

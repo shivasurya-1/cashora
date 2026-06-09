@@ -17,6 +17,7 @@ from app.models.organization import Organization
 from app.models.accounting import DailyBalance
 from app.models.user import UserRole, User
 from app.core.security import get_current_user
+from app.core.roles import enforce_branch_scope, is_admin_like
 from app.core.config import settings
 from app.core.utils import to_ist
 from app.schemas.expense import PaginatedExpenses
@@ -765,6 +766,7 @@ async def get_reports_summary(
     month: Optional[int] = None,
     year: Optional[int] = None,
     category: Optional[str] = None,
+    branch_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -772,10 +774,24 @@ async def get_reports_summary(
     Return a summary of expenses for the given period.
     All three query params are optional; omitting them returns the all-time summary.
     """
-    if current_user.role != UserRole.ACCOUNTANT:
-        raise HTTPException(status_code=403, detail="Access denied. Accountant role required.")
+    if str(current_user.role) not in [UserRole.ACCOUNTANT.value, UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
+        raise HTTPException(status_code=403, detail="Access denied. Accountant/Admin role required.")
 
     base_filters = [ExpenseRequest.org_id == current_user.org_id]
+
+    if is_admin_like(current_user):
+        effective_branch_id = enforce_branch_scope(current_user, branch_id)
+    elif branch_id is not None and branch_id != current_user.branch_id:
+        raise HTTPException(status_code=403, detail="Cannot access another branch.")
+    else:
+        effective_branch_id = current_user.branch_id
+
+    if effective_branch_id is not None:
+        base_filters.append(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
 
     if year:
         base_filters.append(extract("year", ExpenseRequest.created_at) == year)
@@ -828,6 +844,7 @@ async def get_spend_analytics(
     time_range: Optional[str] = None,
     department: Optional[str] = None,
     category: Optional[str] = None,
+    branch_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -837,13 +854,27 @@ async def get_spend_analytics(
     department: department name filter.
     category: category slug filter.
     """
-    if current_user.role != UserRole.ACCOUNTANT:
-        raise HTTPException(status_code=403, detail="Access denied. Accountant role required.")
+    if str(current_user.role) not in [UserRole.ACCOUNTANT.value, UserRole.ADMIN.value, UserRole.SUPER_ADMIN.value]:
+        raise HTTPException(status_code=403, detail="Access denied. Accountant/Admin role required.")
 
     from app.models.user import User as UserModel
     from app.models.department import Department
 
     base_filters = [ExpenseRequest.org_id == current_user.org_id]
+
+    if is_admin_like(current_user):
+        effective_branch_id = enforce_branch_scope(current_user, branch_id)
+    elif branch_id is not None and branch_id != current_user.branch_id:
+        raise HTTPException(status_code=403, detail="Cannot access another branch.")
+    else:
+        effective_branch_id = current_user.branch_id
+
+    if effective_branch_id is not None:
+        base_filters.append(
+            ExpenseRequest.user_id.in_(
+                select(User.id).where(User.branch_id == effective_branch_id)
+            )
+        )
 
     # Time range filter
     if time_range:
