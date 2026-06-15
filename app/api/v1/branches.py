@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.core.roles import enforce_branch_scope, is_admin_like, is_super_admin
+from app.core.roles import enforce_branch_scope, is_admin_like
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.branch import Branch
@@ -31,6 +31,13 @@ class BranchUpdate(BaseModel):
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
+
+
+def _require_org_admin_for_branch_management(current_user: User) -> None:
+    if not is_admin_like(current_user):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    if getattr(current_user, "branch_id", None) is not None:
+        raise HTTPException(status_code=403, detail="Branch-scoped admin cannot manage branches.")
 
 
 async def _ensure_branch_unique(
@@ -124,8 +131,7 @@ async def create_branch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not is_super_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only super admins can create branches.")
+    _require_org_admin_for_branch_management(current_user)
 
     name = _normalize_text(payload.name)
     if len(name) < 2:
@@ -163,8 +169,7 @@ async def update_branch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not is_super_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only super admins can update branches.")
+    _require_org_admin_for_branch_management(current_user)
 
     result = await db.execute(
         select(Branch).where(
@@ -215,8 +220,7 @@ async def delete_branch(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not is_super_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only super admins can delete branches.")
+    _require_org_admin_for_branch_management(current_user)
 
     result = await db.execute(
         select(Branch).where(
@@ -239,8 +243,7 @@ async def seed_default_branches(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not is_super_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only super admins can seed branches.")
+    _require_org_admin_for_branch_management(current_user)
 
     result = await db.execute(select(Branch).where(Branch.org_id == current_user.org_id))
     existing = result.scalars().all()

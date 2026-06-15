@@ -10,7 +10,7 @@ from app.models.department import Department
 from app.models.branch import Branch
 from app.schemas.user import UserOut, UserUpdate, PasswordChange, UserCreate
 from app.core.security import get_current_user
-from app.core.roles import can_assign_role, enforce_branch_scope, is_admin_like, is_branch_admin, is_super_admin
+from app.core.roles import can_assign_role, enforce_branch_scope, is_admin_like, is_branch_admin
 bitter_security = Depends(get_current_user)
 from app.schemas.user import UserUpdateSchema
 from app.core.security import get_password_hash, verify_password
@@ -294,7 +294,7 @@ async def update_user(
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid role: {update_data['role']}. Must be one of: super_admin, admin, requestor, approver, accountant"
+                detail=f"Invalid role: {update_data['role']}. Must be one of: admin, requestor, accountant"
             )
     if "department_id" in update_data:
         if not is_admin:
@@ -351,13 +351,13 @@ async def update_user(
 
     target_role = str(update_data.get("role", original_role))
     target_active = update_data.get("is_active", db_user.is_active)
-    demoting_owner = original_role == UserRole.SUPER_ADMIN.value and target_role != UserRole.SUPER_ADMIN.value
-    deactivating_owner = original_role == UserRole.SUPER_ADMIN.value and target_active is False
+    demoting_owner = original_role in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value} and target_role not in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}
+    deactivating_owner = original_role in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value} and target_active is False
     if demoting_owner or deactivating_owner:
         owner_count_result = await db.execute(
             select(func.count(User.id)).where(
                 User.org_id == current_user.org_id,
-                User.role == UserRole.SUPER_ADMIN.value,
+                User.role.in_([UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value]),
                 User.is_active.is_(True),
             )
         )

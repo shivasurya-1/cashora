@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime
 
 class UserRole(str, enum.Enum):
+    APP_OWNER = "app_owner"
     SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
     REQUESTOR = "requestor"

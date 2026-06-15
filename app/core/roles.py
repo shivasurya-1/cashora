@@ -10,6 +10,10 @@ def normalize_role(value: str) -> str:
     return (value or "").strip().lower()
 
 
+def is_app_owner(user) -> bool:
+    return normalize_role(str(user.role)) == UserRole.APP_OWNER.value
+
+
 def is_super_admin(user) -> bool:
     return normalize_role(str(user.role)) == UserRole.SUPER_ADMIN.value
 
@@ -43,20 +47,11 @@ def can_assign_role(actor_role: str, target_role: str) -> bool:
     actor = normalize_role(actor_role)
     target = normalize_role(target_role)
 
-    if actor == UserRole.SUPER_ADMIN.value:
+    if actor in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}:
         return target in {
-            UserRole.SUPER_ADMIN.value,
             UserRole.ADMIN.value,
             UserRole.ACCOUNTANT.value,
             UserRole.REQUESTOR.value,
-            UserRole.APPROVER.value,
-        }
-
-    if actor == UserRole.ADMIN.value:
-        return target in {
-            UserRole.ACCOUNTANT.value,
-            UserRole.REQUESTOR.value,
-            UserRole.APPROVER.value,
         }
 
     return False

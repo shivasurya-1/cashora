@@ -45,14 +45,14 @@ async def setup_organization(
     db.add(new_org)
     await db.flush() 
 
-    # 3. Create owner user (Backend forces role=SUPER_ADMIN)
+    # 3. Create owner user (org highest role is admin)
     admin_user = User(
         email=org_in.admin_details.email,
         hashed_password=get_password_hash(temp_password), # Hash the random password
         first_name=org_in.admin_details.first_name,
         last_name=org_in.admin_details.last_name,
         phone_number=org_in.admin_details.phone_number,
-        role=UserRole.SUPER_ADMIN,
+        role=UserRole.ADMIN,
         org_id=new_org.id
     )
     db.add(admin_user)
@@ -97,6 +97,18 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid email or password"
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account disabled"
+        )
+
+    if str(user.role).lower() != "app_owner" and user.organization and not getattr(user.organization, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization disabled"
         )
         
     access_token = create_access_token(subject=user.id)
@@ -273,7 +285,7 @@ async def add_staff(
     try:
         parsed_role = UserRole(normalized_role)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid role. Allowed: super_admin, admin, requestor, approver, accountant")
+        raise HTTPException(status_code=400, detail="Invalid role. Allowed: admin, requestor, accountant")
 
     new_user = User(
         email=user_in.email,

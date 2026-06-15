@@ -29,6 +29,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import joinedload
 from app.db.session import get_db
 from app.models.user import User
 
@@ -56,11 +57,23 @@ async def get_current_user(
         raise credentials_exception
 
     # Fetch user from Neon DB
-    query = select(User).where(User.id == int(user_id))
+    query = select(User).options(joinedload(User.organization)).where(User.id == int(user_id))
     result = await db.execute(query)
     user = result.scalar_one_or_none()
 
     if user is None:
         raise credentials_exception
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account disabled"
+        )
+
+    if str(user.role).lower() != "app_owner" and user.organization and not getattr(user.organization, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization disabled"
+        )
     
     return user
