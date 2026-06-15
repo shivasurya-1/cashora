@@ -105,7 +105,7 @@ async def login(
             detail="Account disabled"
         )
 
-    if str(user.role).lower() != "app_owner" and user.organization and not getattr(user.organization, "is_active", True):
+    if str(user.role).lower() not in {"super_admin", "app_owner"} and user.organization and not getattr(user.organization, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Organization disabled"
@@ -247,9 +247,9 @@ async def add_staff(
     current_admin: User = Depends(get_current_user), # Only logged-in users
     db: AsyncSession = Depends(get_db)
 ):
-    # 1. Security Check: Only Admins can add staff
-    if not is_admin_like(current_admin):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    # 1. Security Check: only org admins can add staff (platform super_admin does not use this endpoint)
+    if str(current_admin.role).lower() != UserRole.ADMIN.value:
+        raise HTTPException(status_code=403, detail="Only admins can add staff")
 
     # 2. Generate Credentials
     temp_password = generate_random_password()

@@ -10,12 +10,10 @@ def normalize_role(value: str) -> str:
     return (value or "").strip().lower()
 
 
-def is_app_owner(user) -> bool:
-    return normalize_role(str(user.role)) == UserRole.APP_OWNER.value
-
-
 def is_super_admin(user) -> bool:
-    return normalize_role(str(user.role)) == UserRole.SUPER_ADMIN.value
+    role = normalize_role(str(user.role))
+    # Legacy alias compatibility: app_owner behaves as platform super_admin.
+    return role in {UserRole.SUPER_ADMIN.value, UserRole.APP_OWNER.value}
 
 
 def is_admin_like(user) -> bool:
@@ -47,7 +45,7 @@ def can_assign_role(actor_role: str, target_role: str) -> bool:
     actor = normalize_role(actor_role)
     target = normalize_role(target_role)
 
-    if actor in {UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value}:
+    if actor == UserRole.ADMIN.value:
         return target in {
             UserRole.ADMIN.value,
             UserRole.ACCOUNTANT.value,

@@ -70,7 +70,7 @@ async def get_current_user(
             detail="Account disabled"
         )
 
-    if str(user.role).lower() != "app_owner" and user.organization and not getattr(user.organization, "is_active", True):
+    if str(user.role).lower() not in {"super_admin", "app_owner"} and user.organization and not getattr(user.organization, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Organization disabled"

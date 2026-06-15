@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.roles import is_app_owner
+from app.core.roles import is_super_admin
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.notification import UserDeviceToken
@@ -17,9 +17,9 @@ class ToggleActivePayload(BaseModel):
     is_active: bool
 
 
-def _require_app_owner(current_user: User) -> None:
-    if not is_app_owner(current_user):
-        raise HTTPException(status_code=403, detail="App owner access required")
+def _require_super_admin(current_user: User) -> None:
+    if not is_super_admin(current_user):
+        raise HTTPException(status_code=403, detail="Super admin access required")
 
 
 @router.get("/stats")
@@ -27,7 +27,7 @@ async def get_platform_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_app_owner(current_user)
+    _require_super_admin(current_user)
 
     total_orgs = int((await db.execute(select(func.count(Organization.id)))).scalar() or 0)
     active_orgs = int((await db.execute(select(func.count(Organization.id)).where(Organization.is_active.is_(True)))).scalar() or 0)
@@ -57,7 +57,7 @@ async def list_platform_organizations(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_app_owner(current_user)
+    _require_super_admin(current_user)
 
     user_count_sq = (
         select(User.org_id, func.count(User.id).label("user_count"))
@@ -125,7 +125,7 @@ async def toggle_organization_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_app_owner(current_user)
+    _require_super_admin(current_user)
 
     org = (await db.execute(select(Organization).where(Organization.id == organization_id))).scalar_one_or_none()
     if not org:
@@ -152,7 +152,7 @@ async def list_platform_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_app_owner(current_user)
+    _require_super_admin(current_user)
 
     query = (
         select(
@@ -217,7 +217,7 @@ async def toggle_user_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _require_app_owner(current_user)
+    _require_super_admin(current_user)
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
